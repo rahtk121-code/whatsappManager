@@ -1,0 +1,215 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id       String @id @default(cuid())
+  name     String
+  email    String @unique
+  password String
+  role     String @default("OWNER")
+
+  customers Customer[]
+  products  Product[]
+  orders    Order[]
+  chats     Chat[]
+
+  storeSetting StoreSetting?
+  subscription Subscription?
+
+  usageLogs UsageLog[]
+
+  whatsappSessions WhatsAppSession[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WhatsAppSession {
+  id String @id @default(cuid())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  clientId String @unique
+
+  phone String?
+
+  status String @default("DISCONNECTED")
+
+  qrCode String?
+
+  isReady Boolean @default(false)
+
+  lastActivity DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model StoreSetting {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  storeName        String?
+  storeDescription String?
+
+  aiTone     String @default("friendly")
+  aiLanguage String @default("arabic")
+
+  welcomeMessage String?
+  shippingPolicy String?
+  paymentPolicy  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Subscription {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  plan   String @default("FREE")
+  status String @default("ACTIVE")
+
+  aiRepliesLimit Int @default(20)
+  customersLimit Int @default(50)
+  productsLimit  Int @default(20)
+  ordersLimit    Int @default(30)
+
+  startsAt DateTime @default(now())
+  endsAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UsageLog {
+  id String @id @default(cuid())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type String
+
+  count Int @default(1)
+
+  date DateTime @default(now())
+
+  createdAt DateTime @default(now())
+}
+
+model Customer {
+  id String @id @default(cuid())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name  String?
+  phone String
+
+  city  String?
+  notes String?
+
+  purchaseScore Int @default(0)
+
+  chats  Chat[]
+  orders Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, phone])
+}
+
+model Chat {
+  id String @id @default(cuid())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  status String @default("OPEN")
+
+  messages Message[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Message {
+  id String @id @default(cuid())
+
+  chatId String
+  chat   Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  sender  String
+  content String
+
+  createdAt DateTime @default(now())
+}
+
+model Product {
+  id String @id @default(cuid())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  price Float
+
+  stock Int @default(0)
+
+  image String?
+
+  orderItems OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Order {
+  id String @id @default(cuid())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  status String @default("PENDING")
+
+  total Float @default(0)
+
+  items OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OrderItem {
+  id String @id @default(cuid())
+
+  orderId String
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  quantity Int @default(1)
+
+  price Float
+}
