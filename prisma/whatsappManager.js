@@ -1,8 +1,16 @@
 import qrcode from "qrcode-terminal";
 import pkg from "whatsapp-web.js";
+import puppeteer from "puppeteer";
 
 import { prisma } from "./prisma.js";
 import { generateSmartReply } from "../services/aiService.js";
+
+import {
+  createOrderFromChat,
+  buildOrderConfirmation,
+  buildOrderQuestion,
+} from "../services/orderService.js";
+
 import { emitToUser } from "./socket.js";
 
 const { Client, LocalAuth } = pkg;
@@ -36,7 +44,10 @@ function emitRealtime(userId, event, payload) {
 async function handleIncomingMessage(userId, msg) {
   if (!msg.body || msg.fromMe) return;
 
-  const phone = msg.from.replace("@c.us", "").replace("@lid", "");
+  const phone = msg.from
+    .replace("@c.us", "")
+    .replace("@lid", "");
+
   const text = msg.body.trim();
 
   let customer = await prisma.customer.findFirst({
@@ -56,7 +67,11 @@ async function handleIncomingMessage(userId, msg) {
       },
     });
 
-    emitRealtime(userId, "customer:new", customer);
+    emitRealtime(
+      userId,
+      "customer:new",
+      customer
+    );
   }
 
   let chat = await prisma.chat.findFirst({
@@ -65,14 +80,17 @@ async function handleIncomingMessage(userId, msg) {
       customerId: customer.id,
       status: "OPEN",
     },
+
     include: {
       customer: true,
+
       messages: {
         orderBy: {
           createdAt: "asc",
         },
       },
     },
+
     orderBy: {
       updatedAt: "desc",
     },
@@ -85,118 +103,189 @@ async function handleIncomingMessage(userId, msg) {
         customerId: customer.id,
         status: "OPEN",
       },
+
       include: {
         customer: true,
         messages: true,
       },
     });
 
-    emitRealtime(userId, "chat:new", chat);
+    emitRealtime(
+      userId,
+      "chat:new",
+      chat
+    );
   }
 
-  const customerMessage = await prisma.message.create({
-    data: {
+  const customerMessage =
+    await prisma.message.create({
+      data: {
+        chatId: chat.id,
+        sender: "customer",
+        content: text,
+      },
+    });
+
+  emitRealtime(
+    userId,
+    "message:new",
+    {
       chatId: chat.id,
-      sender: "customer",
-      content: text,
-    },
-  });
+      message: customerMessage,
+      customer,
+    }
+  );
 
-  emitRealtime(userId, "message:new", {
-    chatId: chat.id,
-    message: customerMessage,
-    customer,
-  });
+  const refreshedChat =
+    await prisma.chat.findUnique({
+      where: {
+        id: chat.id,
+      },
 
-  const refreshedChat = await prisma.chat.findUnique({
-    where: {
-      id: chat.id,
-    },
-    include: {
-      customer: true,
-      messages: {
-        orderBy: {
-          createdAt: "asc",
+      include: {
+        customer: true,
+
+        messages: {
+          orderBy: {
+            createdAt: "asc",
+          },
         },
       },
-    },
-  });
+    });
 
-  const products = await prisma.product.findMany({
-    where: {
+  const products =
+    await prisma.product.findMany({
+      where: {
+        userId,
+      },
+    });
+
+  const settings =
+    await prisma.storeSetting.findUnique({
+      where: {
+        userId,
+      },
+    });
+
+  const reply =
+    await generateSmartReply({
+      text,
+      messages:
+        refreshedChat?.messages || [],
+      products,
+      settings,
+    });
+
+  const orderResult =
+    await createOrderFromChat({
       userId,
-    },
-  });
+      customerId: customer.id,
+      text,
+      messages:
+        refreshedChat?.messages || [],
+      products,
+    });
 
-  const settings = await prisma.storeSetting.findUnique({
-    where: {
+  let finalReply = reply;
+
+  if (orderResult.needsConfirmation) {
+    finalReply =
+      `${buildOrderQuestion(orderResult)}\n\n${reply}`;
+  }
+
+  if (orderResult.created) {
+    finalReply =
+      `${buildOrderConfirmation(orderResult)}\n\n${reply}`;
+
+    emitRealtime(
       userId,
-    },
-  });
+      "order:new",
+      orderResult.order
+    );
+  }
 
-  const reply = await generateSmartReply({
-    text,
-    messages: refreshedChat?.messages || [],
-    products,
-    settings,
-  });
+  const aiMessage =
+    await prisma.message.create({
+      data: {
+        chatId: chat.id,
+        sender: "ai",
+        content: finalReply,
+      },
+    });
 
-  const aiMessage = await prisma.message.create({
-    data: {
+  emitRealtime(
+    userId,
+    "message:new",
+    {
       chatId: chat.id,
-      sender: "ai",
-      content: reply,
-    },
-  });
+      message: aiMessage,
+      customer,
+    }
+  );
 
-  emitRealtime(userId, "message:new", {
-    chatId: chat.id,
-    message: aiMessage,
-    customer,
-  });
+  const updatedChat =
+    await prisma.chat.update({
+      where: {
+        id: chat.id,
+      },
 
-  const updatedChat = await prisma.chat.update({
-    where: {
-      id: chat.id,
-    },
-    data: {
-      updatedAt: new Date(),
-    },
-    include: {
-      customer: true,
-      messages: {
-        orderBy: {
-          createdAt: "asc",
+      data: {
+        updatedAt: new Date(),
+      },
+
+      include: {
+        customer: true,
+
+        messages: {
+          orderBy: {
+            createdAt: "asc",
+          },
         },
       },
-    },
-  });
+    });
 
-  emitRealtime(userId, "chat:updated", updatedChat);
+  emitRealtime(
+    userId,
+    "chat:updated",
+    updatedChat
+  );
 
   await upsertSession(userId, {
     lastActivity: new Date(),
   });
 
-  await msg.reply(reply);
+  await msg.reply(finalReply);
 
-  console.log(`💬 USER ${userId} | ${phone}: ${text}`);
-  console.log(`🤖 USER ${userId}: ${reply}`);
+  console.log(
+    `💬 USER ${userId} | ${phone}: ${text}`
+  );
+
+  console.log(
+    `🤖 USER ${userId}: ${finalReply}`
+  );
 }
 
-export async function startClientForUser(userId) {
+export async function startClientForUser(
+  userId
+) {
   if (clients.has(userId)) {
     return clients.get(userId);
   }
 
-  const clientId = getClientId(userId);
+  const clientId =
+    getClientId(userId);
 
-  const startingSession = await upsertSession(userId, {
-    status: "STARTING",
-    isReady: false,
-  });
+  const startingSession =
+    await upsertSession(userId, {
+      status: "STARTING",
+      isReady: false,
+    });
 
-  emitRealtime(userId, "whatsapp:status", startingSession);
+  emitRealtime(
+    userId,
+    "whatsapp:status",
+    startingSession
+  );
 
   const client = new Client({
     authStrategy: new LocalAuth({
@@ -205,115 +294,198 @@ export async function startClientForUser(userId) {
 
     puppeteer: {
       headless: true,
+
       executablePath:
-        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        process.env
+          .PUPPETEER_EXECUTABLE_PATH ||
+        puppeteer.executablePath(),
+
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-zygote",
+        "--single-process",
+      ],
     },
   });
 
   clients.set(userId, client);
 
   client.on("qr", async (qr) => {
-    console.log(`\n📱 QR for user ${userId}:\n`);
-    qrcode.generate(qr, { small: true });
+    console.log(
+      `\n📱 QR for user ${userId}:\n`
+    );
 
-    const session = await upsertSession(userId, {
-      qrCode: qr,
-      status: "QR_READY",
-      isReady: false,
-      lastActivity: new Date(),
+    qrcode.generate(qr, {
+      small: true,
     });
 
-    emitRealtime(userId, "whatsapp:qr", {
-      qrCode: qr,
-      status: "QR_READY",
-      isReady: false,
-    });
+    const session =
+      await upsertSession(userId, {
+        qrCode: qr,
+        status: "QR_READY",
+        isReady: false,
+        lastActivity: new Date(),
+      });
 
-    emitRealtime(userId, "whatsapp:status", session);
+    emitRealtime(
+      userId,
+      "whatsapp:qr",
+      {
+        qrCode: qr,
+        status: "QR_READY",
+        isReady: false,
+      }
+    );
+
+    emitRealtime(
+      userId,
+      "whatsapp:status",
+      session
+    );
   });
 
-  client.on("authenticated", async () => {
-    console.log(`✅ WhatsApp authenticated for user ${userId}`);
+  client.on(
+    "authenticated",
+    async () => {
+      console.log(
+        `✅ WhatsApp authenticated for user ${userId}`
+      );
 
-    const session = await upsertSession(userId, {
-      status: "AUTHENTICATED",
-      qrCode: null,
-      isReady: false,
-      lastActivity: new Date(),
-    });
+      const session =
+        await upsertSession(userId, {
+          status: "AUTHENTICATED",
+          qrCode: null,
+          isReady: false,
+          lastActivity: new Date(),
+        });
 
-    emitRealtime(userId, "whatsapp:status", session);
-  });
+      emitRealtime(
+        userId,
+        "whatsapp:status",
+        session
+      );
+    }
+  );
 
   client.on("ready", async () => {
-    console.log(`✅ WhatsApp ready for user ${userId}`);
+    console.log(
+      `✅ WhatsApp ready for user ${userId}`
+    );
 
     const info = client.info;
 
-    const session = await upsertSession(userId, {
-      status: "READY",
-      qrCode: null,
-      isReady: true,
-      phone: info?.wid?.user || null,
-      lastActivity: new Date(),
-    });
+    const session =
+      await upsertSession(userId, {
+        status: "READY",
+        qrCode: null,
+        isReady: true,
+        phone:
+          info?.wid?.user || null,
+        lastActivity: new Date(),
+      });
 
-    emitRealtime(userId, "whatsapp:status", session);
+    emitRealtime(
+      userId,
+      "whatsapp:status",
+      session
+    );
   });
 
-  client.on("auth_failure", async (msg) => {
-    console.error(`❌ WhatsApp auth failure for user ${userId}:`, msg);
+  client.on(
+    "auth_failure",
+    async (message) => {
+      console.error(
+        `❌ WhatsApp auth failure for user ${userId}:`,
+        message
+      );
 
-    clients.delete(userId);
+      clients.delete(userId);
 
-    const session = await upsertSession(userId, {
-      status: "AUTH_FAILURE",
-      isReady: false,
-      lastActivity: new Date(),
-    });
+      const session =
+        await upsertSession(userId, {
+          status: "AUTH_FAILURE",
+          isReady: false,
+          lastActivity: new Date(),
+        });
 
-    emitRealtime(userId, "whatsapp:status", session);
-  });
-
-  client.on("disconnected", async (reason) => {
-    console.log(`⚠️ WhatsApp disconnected for user ${userId}:`, reason);
-
-    clients.delete(userId);
-
-    const session = await upsertSession(userId, {
-      status: "DISCONNECTED",
-      isReady: false,
-      lastActivity: new Date(),
-    });
-
-    emitRealtime(userId, "whatsapp:status", session);
-  });
-
-  client.on("message", async (msg) => {
-    try {
-      await handleIncomingMessage(userId, msg);
-    } catch (error) {
-      console.error(`WhatsApp message error for user ${userId}:`, error);
+      emitRealtime(
+        userId,
+        "whatsapp:status",
+        session
+      );
     }
-  });
+  );
+
+  client.on(
+    "disconnected",
+    async (reason) => {
+      console.log(
+        `⚠️ WhatsApp disconnected for user ${userId}:`,
+        reason
+      );
+
+      clients.delete(userId);
+
+      const session =
+        await upsertSession(userId, {
+          status: "DISCONNECTED",
+          isReady: false,
+          lastActivity: new Date(),
+        });
+
+      emitRealtime(
+        userId,
+        "whatsapp:status",
+        session
+      );
+    }
+  );
+
+  client.on(
+    "message",
+    async (msg) => {
+      try {
+        await handleIncomingMessage(
+          userId,
+          msg
+        );
+      } catch (error) {
+        console.error(
+          `WhatsApp message error for user ${userId}:`,
+          error
+        );
+      }
+    }
+  );
 
   client.initialize();
 
   return client;
 }
 
-export async function stopClientForUser(userId) {
-  const client = clients.get(userId);
+export async function stopClientForUser(
+  userId
+) {
+  const client =
+    clients.get(userId);
 
   if (!client) {
-    const session = await upsertSession(userId, {
-      status: "DISCONNECTED",
-      isReady: false,
-      qrCode: null,
-    });
+    const session =
+      await upsertSession(userId, {
+        status: "DISCONNECTED",
+        isReady: false,
+        qrCode: null,
+      });
 
-    emitRealtime(userId, "whatsapp:status", session);
+    emitRealtime(
+      userId,
+      "whatsapp:status",
+      session
+    );
 
     return {
       stopped: true,
@@ -323,39 +495,54 @@ export async function stopClientForUser(userId) {
   try {
     await client.destroy();
   } catch (error) {
-    console.warn("WhatsApp destroy warning:", error.message);
+    console.warn(
+      "WhatsApp destroy warning:",
+      error.message
+    );
   }
 
   clients.delete(userId);
 
-  const session = await upsertSession(userId, {
-    status: "DISCONNECTED",
-    isReady: false,
-    qrCode: null,
-    lastActivity: new Date(),
-  });
+  const session =
+    await upsertSession(userId, {
+      status: "DISCONNECTED",
+      isReady: false,
+      qrCode: null,
+      lastActivity: new Date(),
+    });
 
-  emitRealtime(userId, "whatsapp:status", session);
+  emitRealtime(
+    userId,
+    "whatsapp:status",
+    session
+  );
 
   return {
     stopped: true,
   };
 }
 
-export async function getClientStatus(userId) {
-  const clientId = getClientId(userId);
+export async function getClientStatus(
+  userId
+) {
+  const clientId =
+    getClientId(userId);
 
-  let session = await prisma.whatsAppSession.findUnique({
-    where: {
-      clientId,
-    },
-  });
+  let session =
+    await prisma.whatsAppSession.findUnique(
+      {
+        where: {
+          clientId,
+        },
+      }
+    );
 
   if (!session) {
-    session = await upsertSession(userId, {
-      status: "DISCONNECTED",
-      isReady: false,
-    });
+    session =
+      await upsertSession(userId, {
+        status: "DISCONNECTED",
+        isReady: false,
+      });
   }
 
   return {
@@ -365,7 +552,8 @@ export async function getClientStatus(userId) {
 }
 
 export async function getQrCode(userId) {
-  const status = await getClientStatus(userId);
+  const status =
+    await getClientStatus(userId);
 
   return {
     qrCode: status.qrCode,
@@ -376,17 +564,25 @@ export async function getQrCode(userId) {
 }
 
 export async function startAllReadyClients() {
-  const sessions = await prisma.whatsAppSession.findMany({
-    where: {
-      status: {
-        in: ["READY", "AUTHENTICATED"],
-      },
-    },
-  });
+  const sessions =
+    await prisma.whatsAppSession.findMany(
+      {
+        where: {
+          status: {
+            in: [
+              "READY",
+              "AUTHENTICATED",
+            ],
+          },
+        },
+      }
+    );
 
   for (const session of sessions) {
     try {
-      await startClientForUser(session.userId);
+      await startClientForUser(
+        session.userId
+      );
     } catch (error) {
       console.error(
         `Failed to start WhatsApp client for user ${session.userId}:`,
