@@ -42,16 +42,21 @@ export function initWhatsApp() {
       clientId: "wa-sales-agent",
     }),
 
-    puppeteer: {
-      headless: true,
-      executablePath:
-        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-      ],
-    },
-  });
+   puppeteer: {
+  headless: true,
+  executablePath:
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    puppeteer.executablePath(),
+  args: [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--no-first-run",
+    "--no-zygote",
+    "--single-process",
+  ],
+},
 
   client.on("qr", (qr) => {
     console.log("\n📱 امسح QR لتسجيل الدخول:\n");
