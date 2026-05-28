@@ -1,5 +1,6 @@
 import qrcode from "qrcode-terminal";
 import pkg from "whatsapp-web.js";
+import puppeteer from "puppeteer";
 
 import { prisma } from "./prisma.js";
 import { generateSmartReply } from "../services/aiService.js";
@@ -209,8 +210,16 @@ export async function startClientForUser(userId) {
     puppeteer: {
       headless: true,
       executablePath:
-        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-zygote",
+        "--single-process",
+      ],
     },
   });
 
