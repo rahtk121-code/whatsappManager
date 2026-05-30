@@ -225,8 +225,7 @@ export async function startClientForUser(userId) {
   clients.set(userId, client);
 
   client.on("qr", async (qr) => {
-    console.log(`\n📱 QR for user ${userId}:\n`);
-    qrcode.generate(qr, { small: true });
+  console.log(`📱 QR generated for user ${userId}`);
 
     const session = await upsertSession(userId, {
       qrCode: qr,
