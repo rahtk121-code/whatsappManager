@@ -1,6 +1,7 @@
 import qrcode from "qrcode-terminal";
 import pkg from "whatsapp-web.js";
 import puppeteer from "puppeteer";
+
 import { prisma } from "./prisma.js";
 import { generateSmartReply } from "../services/aiService.js";
 
@@ -206,27 +207,26 @@ export async function startClientForUser(userId) {
     authStrategy: new LocalAuth({
       clientId,
     }),
-   puppeteer: {
-  headless: true,
-  executablePath:
-    process.env.PUPPETEER_EXECUTABLE_PATH ||
-    puppeteer.executablePath(),
-  args: [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--no-first-run",
-    "--no-zygote",
-    "--single-process",
-  ],
-},
+    puppeteer: {
+      headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-zygote",
+        "--single-process",
+      ],
+    },
+  });
 
   clients.set(userId, client);
 
   client.on("qr", async (qr) => {
-    console.log(`📱 QR generated for user ${userId}`);
-    
+    console.log(`\n📱 QR for user ${userId}:\n`);
+    qrcode.generate(qr, { small: true });
 
     const session = await upsertSession(userId, {
       qrCode: qr,
